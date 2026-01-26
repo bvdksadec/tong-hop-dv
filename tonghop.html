@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Tổng hợp doanh thu bác sĩ</title>
+
+    <!-- SheetJS -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+    <style>
+        body { font-family: Arial; padding: 20px; }
+        h1 { font-size: 20px; margin-bottom: 10px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 15px; }
+        th, td { border: 1px solid #000; padding: 4px 6px; font-size: 13px; }
+        th { text-align: center; }
+        td.center { text-align: center; }
+        td.number { text-align: right; }
+
+        #exportBtn, #downloadTemplateBtn {
+            margin-top: 15px;
+            padding: 8px 16px;
+            cursor: pointer;
+        }
+
+        .btn-group { margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; }
+
+        /* LOADING */
+        #loading {
+            display: none;
+            font-size: 16px;
+            margin-top: 15px;
+            font-weight: bold;
+            color: rgb(0, 102, 204);
+        }
+    </style>
+</head>
+
+<body>
+
+<h1>Tổng hợp doanh thu bác sĩ khám chữa bệnh theo yêu cầu</h1>
+
+<div>
+    <p>Chọn file Excel (*.xls, *.xlsx) chứa bảng chi tiết:</p>
+    <input type="file" id="fileInput" accept=".xlsx,.xls">
+
+    <div class="btn-group">
+        <button id="downloadTemplateBtn">Tải file mẫu (Excel)</button>
+        <button id="exportBtn" disabled>Xuất Excel (file tổng hợp)</button>
+    </div>
+
+    <div id="loading">⏳ Đang xử lý dữ liệu, vui lòng chờ...</div>
+</div>
+
+<table id="resultTable">
+    <thead>
+    <tr>
+        <th>Stt</th>
+        <th>Tháng</th>
+        <th>Tên phòng khám</th>
+        <th>Họ tên BS khám bệnh</th>
+        <th>Số ca</th>
+        <th>Đơn giá</th>
+        <th>Thành tiền</th>
+        <th>Số ca Xét nghiệm</th>
+        <th>Số ca CĐHA</th>
+        <th>Số ca Lãnh thuốc</th>
+    </tr>
+    </thead>
+    <tbody></tbody>
+</table>
+
+<script>
+let workbookData = null;
+let finalData = [];
+
+// ====== TẢI FILE MẪU (GIỐNG FILE ANH GỬI) ======
+document.getElementById("downloadTemplateBtn").addEventListener("click", function () {
+    const templateData = [
+        [
+            "Stt",
+            "Mã BA",
+            "Họ tên bệnh nhân",
+            "Họ tên BS khám bệnh",
+            "Tháng",
+            "Phòng",
+            "Số ca",
+            "Đơn giá",
+            "Thành tiền",
+            "thuốc",
+            "xét nghiệm",
+            "CĐHA"
+        ],
+        // 1 dòng ví dụ
+        [
+            1,
+            "2509100190",
+            "NGUYỄN VĂN THỨC",
+            "Bs. Huỳnh Ngọc Tân",
+            "09",
+            "PHÒNG KHÁM DV NGOAI 04",
+            1,
+            100000,
+            100000,
+            "",
+            "",
+            1
+        ]
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "ChiTiet");
+    XLSX.writeFile(wb, "Mau_ChiTiet_BacSi.xlsx");
+});
+
+// ====== ĐỌC FILE ======
+document.getElementById("fileInput").addEventListener("change", function () {
+    const file = this.files[0];
+    if (!file) return;
+
+    showLoading(true);
+
+    const reader = new FileReader();
+    reader.onload = function (e) {
+        const wb = XLSX.read(new Uint8Array(e.target.result), {type: "array"});
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        workbookData = XLSX.utils.sheet_to_json(sheet, {header: 1});
+
+        processData();
+        showLoading(false);
+    };
+    reader.readAsArrayBuffer(file);
+});
+
+function showLoading(status) {
+    document.getElementById("loading").style.display = status ? "block" : "none";
+}
+
+function parseNumber(value) {
+    if (typeof value === "number") return value;
+    return Number(String(value).replace(/[^\d]/g, "")) || 0;
+}
+
+function formatMoney(num) {
+    return new Intl.NumberFormat('vi-VN').format(num);
+}
+
+function processData() {
+    const rows = workbookData;
+    const header = rows[0];
+
+    const idxThang = header.indexOf("Tháng");
+    // chấp nhận 2 kiểu tên cột
+    let idxBS = header.indexOf("Họ tên BS khám bệnh");
+    if (idxBS === -1) idxBS = header.indexOf("Họ tên bác sĩ khám bệnh");
+
+    const idxPhong   = header.indexOf("Phòng");
+    const idxSoCa    = header.indexOf("Số ca");
+    const idxDonGia  = header.indexOf("Đơn giá");
+    const idxThuoc   = header.indexOf("thuốc");
+    const idxXN      = header.indexOf("xét nghiệm");
+    const idxCDHA    = header.indexOf("CĐHA");
+
+    const groups = new Map();
+
+    for (let i = 1; i < rows.length; i++) {
+        const r = rows[i];
+        if (!r || r.length < 8) continue;
+
+        const thang = String(r[idxThang] || "").trim();
+        const phong = String(r[idxPhong] || "").trim();
+        const bs    = String(r[idxBS] || "").trim();
+        const key   = thang + "||" + phong + "||" + bs;
+
+        const soCa   = parseNumber(r[idxSoCa] || 1);
+        const donGia = parseNumber(r[idxDonGia]);
+        const thuoc  = parseNumber(r[idxThuoc]) > 0 ? 1 : 0;
+        const xn     = parseNumber(r[idxXN]) > 0 ? 1 : 0;
+        const cdha   = parseNumber(r[idxCDHA]) > 0 ? 1 : 0;
+
+        if (!groups.has(key)) {
+            groups.set(key, {
+                thang, phong, bs,
+                soCa: 0, thuoc: 0, xn: 0, cdha: 0,
+                donGia: donGia || 0
+            });
+        }
+
+        const g = groups.get(key);
+        g.soCa += soCa;
+        g.thuoc += thuoc;
+        g.xn    += xn;
+        g.cdha  += cdha;
+        if (!g.donGia && donGia) g.donGia = donGia;
+    }
+
+    renderTable(groups);
+}
+
+function renderTable(groups) {
+    const tbody = document.querySelector("#resultTable tbody");
+    tbody.innerHTML = "";
+
+    finalData = [];
+    finalData.push([
+        "Stt", "Tháng", "Tên phòng khám", "Họ tên BS khám bệnh",
+        "Số ca", "Đơn giá", "Thành tiền", "Số ca Xét nghiệm",
+        "Số ca CĐHA", "Số ca Lãnh thuốc"
+    ]);
+
+    let stt = 1;
+
+    [...groups.values()]
+        .sort((a, b) => a.thang.localeCompare(b.thang))
+        .forEach(g => {
+            const thanhTien = g.soCa * g.donGia;
+
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+                <td class="center">${stt}</td>
+                <td class="center">${g.thang}</td>
+                <td>${g.phong}</td>
+                <td>${g.bs}</td>
+                <td class="center">${g.soCa}</td>
+                <td class="number">${formatMoney(g.donGia)}</td>
+                <td class="number">${formatMoney(thanhTien)}</td>
+                <td class="center">${g.xn}</td>
+                <td class="center">${g.cdha}</td>
+                <td class="center">${g.thuoc}</td>
+            `;
+            tbody.appendChild(tr);
+
+            finalData.push([
+                stt, g.thang, g.phong, g.bs,
+                g.soCa, g.donGia, thanhTien,
+                g.xn, g.cdha, g.thuoc
+            ]);
+
+            stt++;
+        });
+
+    document.getElementById("exportBtn").disabled = false;
+}
+
+// ====== EXPORT ======
+document.getElementById("exportBtn").addEventListener("click", function () {
+    const ws = XLSX.utils.aoa_to_sheet(finalData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "TongHop");
+    XLSX.writeFile(wb, "TongHop_BacSi.xlsx");
+});
+</script>
+
+</body>
+</html>
